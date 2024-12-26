@@ -4,3 +4,6 @@ __pycache__/
 .idea
 *.zip
 *.pkl
+output/
+poetry.lock
+pyproject.toml
