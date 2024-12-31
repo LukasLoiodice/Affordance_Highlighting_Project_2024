@@ -6,8 +6,63 @@ from utils import device
 import torch
 import numpy as np
 
+from pytorch3d.structures import Pointclouds
+from pytorch3d.vis.plotly_vis import AxisArgs, plot_batch_individually, plot_scene
+from pytorch3d.renderer import (
+    look_at_view_transform,
+    FoVOrthographicCameras, 
+    PointsRasterizationSettings,
+    PointsRenderer,
+    PulsarPointsRenderer,
+    PointsRasterizer,
+    AlphaCompositor,
+    NormWeightedCompositor
+)
 
-class Renderer():
+class PointsCloudRenderer():
+    def __init__(self,
+                 background,
+                 dim=(224, 224)):
+        # Define rasterization settings
+        raster_settings = PointsRasterizationSettings(
+            image_size=dim, 
+            radius=0.003,
+            points_per_pixel=10
+        )
+
+        # Renderer setup (cameras will be updated dynamically)
+        self.rasterizer = PointsRasterizer(raster_settings=raster_settings)
+        self.renderer = PointsRenderer(
+            rasterizer=self.rasterizer,
+            compositor=NormWeightedCompositor(background_color=background)
+        )
+
+    def render_views(self,
+                     points_clouds,
+                     num_views=8,
+                     std=8,
+                     center_elev=0,
+                     center_azim=0):
+        # Compute elev and azim
+        images = []
+        elev = torch.randn(num_views) * np.pi / std + center_elev
+        azim = torch.randn(num_views) * 2 * np.pi / std + center_azim
+
+        for i in range(num_views):
+            # Create camera
+            R, T = look_at_view_transform(10, elev[i], azim[i], device=device, degrees=False)
+            cameras = FoVOrthographicCameras(device=device, R=R, T=T, znear=0.01)
+            self.rasterizer.cameras = cameras
+
+            # Render image
+            rendered_image = self.renderer(points_clouds)
+            images.append(rendered_image)
+
+        # Permute dimensions according to torch.utils.save_image : #image, #width, #height, #channel -> #image, #channel, #width, #height
+        images = torch.cat(images, dim=0).permute(0, 3, 1, 2)
+        return images
+
+class MeshRenderer():
 
     def __init__(self, mesh='sample.obj',
                  lights=torch.tensor([1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),

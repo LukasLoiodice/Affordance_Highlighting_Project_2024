@@ -14,13 +14,12 @@ import torchvision
 from itertools import permutations, product
 from Normalization import MeshNormalizer
 from mesh import Mesh
-from pointsCloud import PointsCloud
 from pathlib import Path
-from render import PointsCloudRenderer
+from render import MeshRenderer
 from tqdm import tqdm
 from torch.autograd import grad
 from torchvision import transforms
-from utils import device, color_mesh, color_points_cloud
+from utils import device, color_mesh
 
 class NeuralHighlighter(nn.Module):
     def __init__(self, depth, width, output_dim, input_dim=3):
@@ -57,6 +56,35 @@ class NeuralHighlighter(nn.Module):
 
 def get_clip_model(clipmodel):
     return clip.load(clipmodel, device=device)
+
+# ================== HELPER FUNCTIONS =============================
+def save_final_results(log_dir, name, mesh, mlp, vertices, colors, render, background):
+    mlp.eval()
+    with torch.no_grad():
+        probs = mlp(vertices)
+        max_idx = torch.argmax(probs, 1, keepdim=True)
+        # for renders
+        one_hot = torch.zeros(probs.shape).to(device)
+        one_hot = one_hot.scatter_(1, max_idx, 1)
+        sampled_mesh = mesh
+
+        highlight = torch.tensor([204, 255, 0]).to(device)
+        gray = torch.tensor([180, 180, 180]).to(device)
+        colors = torch.stack((highlight/255, gray/255)).to(device)
+        color_mesh(one_hot, sampled_mesh, colors)
+        rendered_images, _, _ = render.render_views(sampled_mesh, num_views=5,
+                                                                        show=False,
+                                                                        center_azim=0,
+                                                                        center_elev=0,
+                                                                        std=1,
+                                                                        return_views=True,
+                                                                        lighting=True,
+                                                                        background=background)
+        # for mesh
+        final_color = torch.zeros(vertices.shape[0], 3).to(device)
+        final_color = torch.where(max_idx==0, highlight, gray)
+        mesh.export(os.path.join(log_dir, f"{name}.ply"), extension="ply", color=final_color)
+        save_renders(log_dir, 0, rendered_images, name='final_render.jpg')
         
 
 def clip_loss(clip_text: torch.Tensor, rendered_images: torch.Tensor, clip_model: clip.model.CLIP, n_augs: int, augment_transform: transforms.Compose) -> torch.Tensor:
@@ -106,11 +134,12 @@ Path(os.path.join(output_dir, 'renders')).mkdir(parents=True, exist_ok=True)
 
 objbase, extension = os.path.splitext(os.path.basename(obj_path))
 
+render = MeshRenderer(dim=(render_res, render_res))
+mesh = Mesh(obj_path)
+MeshNormalizer(mesh)()
+
 # Initialize variables
 background = torch.tensor((1., 1., 1.)).to(device)
-
-render = PointsCloudRenderer(background, dim=(render_res, render_res))
-points_cloud = PointsCloud(obj_path, 10_000)
 
 log_dir = output_dir
 
@@ -125,7 +154,7 @@ color_to_rgb = {"highlighter": [204/255, 1., 0.], "gray": [180/255, 180/255, 180
 full_colors = [[204/255, 1., 0.], [180/255, 180/255, 180/255]]
 colors = torch.tensor(full_colors).to(device)
 
-# Transformations for images augmentations
+# Transformations for imagse augmentations
 augment_transform = transforms.Compose([
     transforms.RandomResizedCrop(res, scale=(1, 1)),
     transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5)
@@ -136,15 +165,13 @@ augment_transform = transforms.Compose([
 # encode prompt with CLIP
 clip_model, _ = get_clip_model(clip_model)
 obj = "horse"
-region = "hat"
-prompt = f"3D point cloud of a gray {obj} with bright green highlighted points on {region}."
+region = "shooes"
+prompt = f"a gray {obj} with highlighted {region}."
 with torch.no_grad():
     prompt_tokenize = clip.tokenize(prompt).to(device)
     clip_text = clip_model.encode_text(prompt_tokenize)
 
-
-points = points_cloud.points_cloud.points_list()[0]
-
+vertices = copy.deepcopy(mesh.vertices)
 n_views = 5
 
 losses = []
@@ -154,15 +181,19 @@ for i in tqdm(range(n_iter)):
     optim.zero_grad()
 
     # predict highlight probabilities
-    pred_class = mlp(points)
+    pred_class = mlp(vertices)
 
     # color and render mesh
-    sample_points_cloud = points_cloud
-    sample_points_cloud.points_cloud = color_points_cloud(pred_class, points, colors)
-
-    rendered_images = render.render_views(sample_points_cloud.points_cloud,
-                                               num_views=n_views,
-                                               std=1)
+    sampled_mesh = mesh
+    color_mesh(pred_class, sampled_mesh, colors)
+    rendered_images, elev, azim = render.render_views(sampled_mesh, num_views=n_views,
+                                                            show=False,
+                                                            center_azim=0,
+                                                            center_elev=0,
+                                                            std=1,
+                                                            return_views=True,
+                                                            lighting=True,
+                                                            background=background)
 
     # Calculate CLIP Loss
     loss = clip_loss(clip_text, rendered_images, clip_model, n_augs, augment_transform)
@@ -183,7 +214,7 @@ for i in tqdm(range(n_iter)):
 
 
 # save results
-sample_points_cloud.save(f"{output_dir}{prompt.replace(' ', '_')}.ply")
+save_final_results(log_dir, prompt.replace(" ", "_"), mesh, mlp, vertices, colors, render, background)
 
 # Save prompts
 # with open(os.path.join(dir(), prompt), "w") as f:

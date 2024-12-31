@@ -7,6 +7,7 @@ from torchvision import transforms
 from pathlib import Path
 from collections import Counter
 from Normalization import MeshNormalizer
+from pytorch3d.structures import Pointclouds
 
 if torch.cuda.is_available():
     device = torch.device("cuda:0")
@@ -48,6 +49,10 @@ def color_mesh(pred_class, sampled_mesh, colors):
         pred_rgb.unsqueeze(0),
         sampled_mesh.faces)
     MeshNormalizer(sampled_mesh)()
+
+def color_points_cloud(pred_class, points, colors):
+    pred_rgb = segment2rgb(pred_class, colors)
+    return Pointclouds(points=[points], features=[pred_rgb])
 
 def segment2rgb(pred_class, colors):
     pred_rgb = torch.zeros(pred_class.shape[0], 3).to(device)
