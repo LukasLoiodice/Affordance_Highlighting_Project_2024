@@ -22,11 +22,12 @@ from pytorch3d.renderer import (
 class PointsCloudRenderer():
     def __init__(self,
                  background,
-                 dim=(224, 224)):
+                 dim=(224, 224),
+                 radius=0.02):
         # Define rasterization settings
         raster_settings = PointsRasterizationSettings(
             image_size=dim, 
-            radius=0.003,
+            radius=radius,
             points_per_pixel=10
         )
 

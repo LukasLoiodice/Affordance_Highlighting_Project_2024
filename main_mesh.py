@@ -22,14 +22,14 @@ from torchvision import transforms
 from utils import device, color_mesh
 
 class NeuralHighlighter(nn.Module):
-    def __init__(self, depth, width, output_dim, input_dim=3):
+    def __init__(self, depth, width, output_dim=2, input_dim=3):
         super(NeuralHighlighter, self).__init__()
 
         # Adapt input dim to the width of the model
         moduleList = nn.ModuleList([
             nn.Linear(input_dim, width),
             nn.ReLU(),
-            nn.LayerNorm(width)
+            nn.LayerNorm([width])
         ])
 
         # Append all the remaining layers
@@ -37,7 +37,7 @@ class NeuralHighlighter(nn.Module):
             moduleList.extend([
                 nn.Linear(width, width),
                 nn.ReLU(),
-                nn.LayerNorm(width)
+                nn.LayerNorm([width])
             ])
 
         # Append last layer with softmax
@@ -124,7 +124,8 @@ learning_rate = 0.0001
 n_iter = 2500
 res = 224
 obj_path = 'data/horse.obj'
-n_augs = 5
+n_views = 5
+n_augs = 1
 output_dir = './output/'
 clip_model = 'ViT-L/14'
 depth = 4
@@ -145,7 +146,7 @@ log_dir = output_dir
 
 
 # MLP Settings
-mlp = NeuralHighlighter(depth, width, 3).to(device)
+mlp = NeuralHighlighter(depth, width).to(device)
 optim = torch.optim.Adam(mlp.parameters(), learning_rate)
 
 # list of possible colors
@@ -155,9 +156,11 @@ full_colors = [[204/255, 1., 0.], [180/255, 180/255, 180/255]]
 colors = torch.tensor(full_colors).to(device)
 
 # Transformations for imagse augmentations
+clip_normalizer = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 augment_transform = transforms.Compose([
     transforms.RandomResizedCrop(res, scale=(1, 1)),
-    transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5)
+    transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+    clip_normalizer
 ])
 
 
@@ -165,14 +168,14 @@ augment_transform = transforms.Compose([
 # encode prompt with CLIP
 clip_model, _ = get_clip_model(clip_model)
 obj = "horse"
-region = "shooes"
-prompt = f"a gray {obj} with highlighted {region}."
+region = "shoes"
+prompt = f"A 3D render of a gray {obj} with highlighted {region}."
 with torch.no_grad():
     prompt_tokenize = clip.tokenize(prompt).to(device)
     clip_text = clip_model.encode_text(prompt_tokenize)
+    clip_text = clip_text / clip_text.norm(dim=1, keepdim=True)
 
 vertices = copy.deepcopy(mesh.vertices)
-n_views = 5
 
 losses = []
 

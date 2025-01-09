@@ -12,7 +12,7 @@ import torch.nn as nn
 import torchvision
 
 from itertools import permutations, product
-from Normalization import MeshNormalizer
+from Normalization import MeshNormalizer, PointsCloudNormalizer
 from mesh import Mesh
 from pointsCloud import PointsCloud
 from pathlib import Path
@@ -23,14 +23,14 @@ from torchvision import transforms
 from utils import device, color_mesh, color_points_cloud
 
 class NeuralHighlighter(nn.Module):
-    def __init__(self, depth, width, output_dim, input_dim=3):
+    def __init__(self, depth, width, output_dim=2, input_dim=3):
         super(NeuralHighlighter, self).__init__()
 
         # Adapt input dim to the width of the model
         moduleList = nn.ModuleList([
             nn.Linear(input_dim, width),
             nn.ReLU(),
-            nn.LayerNorm(width)
+            nn.LayerNorm([width])
         ])
 
         # Append all the remaining layers
@@ -38,7 +38,7 @@ class NeuralHighlighter(nn.Module):
             moduleList.extend([
                 nn.Linear(width, width),
                 nn.ReLU(),
-                nn.LayerNorm(width)
+                nn.LayerNorm([width])
             ])
 
         # Append last layer with softmax
@@ -95,12 +95,15 @@ render_res = 224
 learning_rate = 0.0001
 n_iter = 2500
 res = 224
-obj_path = 'data/horse.obj'
-n_augs = 5
+obj_path = 'data/horse.ply'
+n_views = 5
+n_augs = 1
 output_dir = './output/'
-clip_model = 'ViT-L/14'
+clip_model_name = 'ViT-L/14'
 depth = 4
 width = 256
+sample_points = 2048
+render_point_radius = 0.01
 
 Path(os.path.join(output_dir, 'renders')).mkdir(parents=True, exist_ok=True)
 
@@ -109,14 +112,15 @@ objbase, extension = os.path.splitext(os.path.basename(obj_path))
 # Initialize variables
 background = torch.tensor((1., 1., 1.)).to(device)
 
-render = PointsCloudRenderer(background, dim=(render_res, render_res))
-points_cloud = PointsCloud(obj_path, 10_000)
+render = PointsCloudRenderer(background, dim=(render_res, render_res), radius=render_point_radius)
+points_cloud = PointsCloud(obj_path, sample_points)
+PointsCloudNormalizer.PointsCloudNormalizer(points_cloud)()
 
 log_dir = output_dir
 
 
 # MLP Settings
-mlp = NeuralHighlighter(depth, width, 3).to(device)
+mlp = NeuralHighlighter(depth, width).to(device)
 optim = torch.optim.Adam(mlp.parameters(), learning_rate)
 
 # list of possible colors
@@ -126,26 +130,27 @@ full_colors = [[204/255, 1., 0.], [180/255, 180/255, 180/255]]
 colors = torch.tensor(full_colors).to(device)
 
 # Transformations for images augmentations
+clip_normalizer = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 augment_transform = transforms.Compose([
     transforms.RandomResizedCrop(res, scale=(1, 1)),
-    transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5)
+    transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+    clip_normalizer
 ])
 
 
 # --- Prompt ---
 # encode prompt with CLIP
-clip_model, _ = get_clip_model(clip_model)
+clip_model, _ = get_clip_model(clip_model_name)
 obj = "horse"
-region = "hat"
-prompt = f"3D point cloud of a gray {obj} with bright green highlighted points on {region}."
+region = "shoes"
+prompt = f"A point cloud render of a gray {obj} with highlighted {region}"
+print("prompt : ", prompt)
 with torch.no_grad():
     prompt_tokenize = clip.tokenize(prompt).to(device)
     clip_text = clip_model.encode_text(prompt_tokenize)
+    clip_text = clip_text / clip_text.norm(dim=1, keepdim=True)
 
-
-points = points_cloud.points_cloud.points_list()[0]
-
-n_views = 5
+points = copy.deepcopy(points_cloud.points_cloud.points_list()[0])
 
 losses = []
 
@@ -183,7 +188,7 @@ for i in tqdm(range(n_iter)):
 
 
 # save results
-sample_points_cloud.save(f"{output_dir}{prompt.replace(' ', '_')}.ply")
+sample_points_cloud.save(f"{output_dir}{prompt.replace(' ', '_').replace('.', '')}.ply")
 
 # Save prompts
 # with open(os.path.join(dir(), prompt), "w") as f:
