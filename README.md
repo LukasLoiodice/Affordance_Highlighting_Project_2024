@@ -1,53 +1,43 @@
-# Affordance Highlighting project
+# Neural Point Cloud Highlighting of Affordance Region [Politecnico di Torino 2025]
+
+*Lukas Loiodice (s334726), Louise Tiger (s33527) & Antoine Wencel (s321430)*
+
+Politecnico di Torino
+
+Introduction: *This paper aims to present our exploration, implementation and propositions of extension of the 3D highlighter developed by students from the University of Chicago. The goal of the project was to build a label-free pipeline for affordance generation on point cloud in a zero-shot fashion,leveraging pre-trained language vision models.*
 
 
-<!-- ### [[Project Page](https://threedle.github.io/3DHighlighter/)] [[ArXiv](https://arxiv.org/abs/2212.11263)] -->
-<a href="https://arxiv.org/abs/2212.11263"><img src="https://img.shields.io/badge/arXiv-3DHighlighter-b31b1b.svg" height=22.5></a>
-<a href="https://threedle.github.io/3DHighlighter"><img src="https://img.shields.io/website?down_color=lightgrey&down_message=offline&label=Project%20Page&up_color=lightgreen&up_message=online&url=https%3A%2F%2Fpals.ttic.edu%2Fp%2Fscore-jacobian-chaining" height=22.5></a>
+![3mugs](./media/picture_intro.png)
 
-![teaser](./media/teaser.png)
+### Run Examples
 
-
-## Installation
-
-Install and activate the conda environment with the following commands. 
+To run the experiments on google colab, you can copy the project on your drive and copy past the code below.
 ```
-conda env create --file 3DHighlighter.yml
-conda activate 3DHighlighter
-```
-Note: The installation will fail if run on something other than a CUDA GPU machine.
+# Mount Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
 
-#### System Requirements
-- Python 3.9
-- CUDA 11
-- 16 GB GPU
+# Navigate to the project directory
+import os
+os.chdir("/content/drive/MyDrive/Affordance_Highlighting_Project_2024")
 
-## Run Examples
-Run the scripts below to get example localizations.
-```
-# hat on a candle
-./demo/run_candle_hat.sh
-# hat on a dog
-./demo/run_dog_hat.sh
-# shoes on a horse
-./demo/run_horse_shoes.sh
+# Check if the ZIP file or the extracted folder exists
+if not os.path.exists("AffordanceNet.zip"):
+  !pip install gdown
+  !gdown 1siZtGusB1LfQVapTvNOiYi8aeKKAgcDF -O AffordanceNet.zip
+
+if not os.path.exists("./AffordanceNet") or not os.path.exists("./AffordanceNet/full_shape_train_data.pkl"):
+  !unzip -o AffordanceNet.zip -d ./AffordanceNet
+
+# Run the program
+!rm -rf output/
+!pip install git+https://github.com/openai/CLIP.git
+!pip install open3d
+!pip install iopath
+!pip install pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt251/download.html
+!pip install kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu124.html
+!python main.py
 ```
 
-### Note on Reproducibility
+#### Note on Reproducibility
 Due to small non-determinisms in CLIP's backward process and the sensitivity of our optimization, results can vary across different runs even when fully seeded. If the result of the optimization does not match the expected result, try re-running the optimization.
-
-## Tips for Troubleshooting New Mesh+Region Combinations:
-- Due to the sensitivity of the optimization process, if a mesh+prompt combination does not work on the first try, rerun the optimization with a new seed as it might just have found a bad local minimum.
-- If an initial specification of a region does not work well, try describing that region with more specific language (i.e. 'eyeglasses' instead of 'glasses'). Also, try using a different target localization text that might correspond to a similar region (i.e. using 'headphones' or 'earmuffs' instead of 'ears').
-- In our experiments, we found that using gray and highlighter colors and the prompt format of `"A 3D render of a gray [object] with highlighted [region]"` works best for most mesh+region combinations. However, we encourage users to edit the code to try different prompt specifications since different wordings might work better with new and different mesh+region combinations.
-- The traingulation of the mesh is important. Meshes containing long, skinny triangles and/or small numbers of vertices can lead to bad optimizations.
-
-## Citation
-```
-@article{decatur2022highlighter,
-    author = {Decatur, Dale and Lang, Itai and Hanocka, Rana},
-    title  = {3D Highlighter: Localizing Regions on 3D Shapes via Text Descriptions},
-    journal = {arXiv},
-    year = {2022}
-}
-```

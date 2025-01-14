@@ -19,7 +19,7 @@ from render import MeshRenderer
 from tqdm import tqdm
 from torch.autograd import grad
 from torchvision import transforms
-from utils import device, color_mesh
+from utils import device, color_mesh, random_background
 
 class NeuralHighlighter(nn.Module):
     def __init__(self, depth, width, output_dim=2, input_dim=3):
@@ -87,9 +87,10 @@ def save_final_results(log_dir, name, mesh, mlp, vertices, colors, render, backg
         save_renders(log_dir, 0, rendered_images, name='final_render.jpg')
         
 
-def clip_loss(clip_text: torch.Tensor, rendered_images: torch.Tensor, clip_model: clip.model.CLIP, n_augs: int, augment_transform: transforms.Compose) -> torch.Tensor:
+def clip_loss(clip_text: torch.Tensor, rendered_images: torch.Tensor, clip_model: clip.model.CLIP, n_augs: int, augment_transform: transforms.Compose, clip_transform: transforms.Compose) -> torch.Tensor:
     if n_augs == 0:
-        clip_images: torch.Tensor = clip_model.encode_image(rendered_images)
+        transformed_images = clip_transform(rendered_images)
+        clip_images: torch.Tensor = clip_model.encode_image(transformed_images)
         return -(torch.cosine_similarity(clip_text, torch.mean(clip_images)))
     
     loss = .0
@@ -128,7 +129,7 @@ n_views = 5
 n_augs = 1
 output_dir = './output/'
 clip_model = 'ViT-L/14'
-depth = 4
+depth = 2
 width = 256
 
 Path(os.path.join(output_dir, 'renders')).mkdir(parents=True, exist_ok=True)
@@ -157,10 +158,18 @@ colors = torch.tensor(full_colors).to(device)
 
 # Transformations for imagse augmentations
 clip_normalizer = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
-augment_transform = transforms.Compose([
-    transforms.RandomResizedCrop(res, scale=(1, 1)),
-    transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+clip_transform = transforms.Compose([
+    transforms.Resize((res, res)),
     clip_normalizer
+])
+augment_transform = transforms.Compose([
+        transforms.RandomResizedCrop(res, scale=(1.0, 1.0)),
+        transforms.Lambda(lambda img: random_background(img, resolution=res)),
+        transforms.RandomHorizontalFlip(p=0.5), 
+        transforms.RandomRotation(degrees=30),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+        clip_normalizer
 ])
 
 
@@ -168,8 +177,8 @@ augment_transform = transforms.Compose([
 # encode prompt with CLIP
 clip_model, _ = get_clip_model(clip_model)
 obj = "horse"
-region = "shoes"
-prompt = f"A 3D render of a gray {obj} with highlighted {region}."
+region = "Shoes"
+prompt = f"A gray {obj} with highlighted {region}."
 with torch.no_grad():
     prompt_tokenize = clip.tokenize(prompt).to(device)
     clip_text = clip_model.encode_text(prompt_tokenize)
@@ -199,7 +208,7 @@ for i in tqdm(range(n_iter)):
                                                             background=background)
 
     # Calculate CLIP Loss
-    loss = clip_loss(clip_text, rendered_images, clip_model, n_augs, augment_transform)
+    loss = clip_loss(clip_text, rendered_images, clip_model, n_augs, augment_transform, clip_transform)
     loss.backward(retain_graph=True)
 
     optim.step()

@@ -10,6 +10,7 @@ import random
 import torch
 import torch.nn as nn
 import torchvision
+import pickle
 
 from itertools import permutations, product
 from Normalization import MeshNormalizer, PointsCloudNormalizer
@@ -20,7 +21,7 @@ from render import PointsCloudRenderer
 from tqdm import tqdm
 from torch.autograd import grad
 from torchvision import transforms
-from utils import device, color_mesh, color_points_cloud
+from utils import device, color_mesh, color_points_cloud, intersection_over_union, down_sample
 
 class NeuralHighlighter(nn.Module):
     def __init__(self, depth, width, output_dim=2, input_dim=3):
@@ -59,9 +60,10 @@ def get_clip_model(clipmodel):
     return clip.load(clipmodel, device=device)
         
 
-def clip_loss(clip_text: torch.Tensor, rendered_images: torch.Tensor, clip_model: clip.model.CLIP, n_augs: int, augment_transform: transforms.Compose) -> torch.Tensor:
+def clip_loss(clip_text: torch.Tensor, rendered_images: torch.Tensor, clip_model: clip.model.CLIP, n_augs: int, augment_transform: transforms.Compose, clip_transform: transforms.Compose) -> torch.Tensor:
     if n_augs == 0:
-        clip_images: torch.Tensor = clip_model.encode_image(rendered_images)
+        transformed_images = clip_transform(rendered_images)
+        clip_images: torch.Tensor = clip_model.encode_image(transformed_images)
         return -(torch.cosine_similarity(clip_text, torch.mean(clip_images)))
     
     loss = .0
@@ -93,27 +95,45 @@ torch.backends.cudnn.deterministic = True
 
 render_res = 224
 learning_rate = 0.0001
-n_iter = 2500
+n_iter = 3000
 res = 224
-obj_path = 'data/horse.obj'
+affordanceNet_path = 'AffordanceNet/full_shape_train_data.pkl' 
+selected_index = 9447 # first mug index 9447
 n_views = 5
-n_augs = 1
+n_augs = 2
 output_dir = './output/'
 clip_model_name = 'ViT-L/14'
-depth = 4
+depth = 5
 width = 256
 sample_points = 2048
-render_point_radius = 0.01
+render_point_radius = 0.03
+iou_treshold = 0.4
+augment_extention = False
+downsample_extention = False
+downsample_strength = 0.08
 
 Path(os.path.join(output_dir, 'renders')).mkdir(parents=True, exist_ok=True)
 
-objbase, extension = os.path.splitext(os.path.basename(obj_path))
+# Get data from AffordanceNet
+try:
+    file = open(affordanceNet_path, "rb")
+except FileNotFoundError:
+    raise Exception("You need to specify/download the affordanceNet full shape data")
+else:
+    with file:
+        data = pickle.load(file)
+        selected_shape = data[selected_index]
+        points = torch.tensor(selected_shape['full_shape']["coordinate"]).cuda()
+        ground_truth = torch.tensor(selected_shape["full_shape"]["label"]["grasp"]).cuda()
+
+if downsample_extention:
+    points = down_sample(points, downsample_strength)
 
 # Initialize variables
 background = torch.tensor((1., 1., 1.)).to(device)
 
 render = PointsCloudRenderer(background, dim=(render_res, render_res), radius=render_point_radius)
-points_cloud = PointsCloud(obj_path, sample_points)
+points_cloud = PointsCloud(points, sample_points)
 PointsCloudNormalizer.PointsCloudNormalizer(points_cloud)()
 
 log_dir = output_dir
@@ -131,19 +151,31 @@ colors = torch.tensor(full_colors).to(device)
 
 # Transformations for images augmentations
 clip_normalizer = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
-augment_transform = transforms.Compose([
-    transforms.RandomResizedCrop(res, scale=(1, 1)),
-    transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+clip_transform = transforms.Compose([
+    transforms.Resize((res, res)),
     clip_normalizer
 ])
+if augment_extention:
+    augment_transform = transforms.Compose([
+        transforms.RandomResizedCrop(res, scale=(1.0, 1.0)),
+        transforms.RandomHorizontalFlip(p=0.5), 
+        transforms.RandomRotation(degrees=30),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+        clip_normalizer
+    ])
+else:
+    augment_transform = transforms.Compose([
+        transforms.RandomResizedCrop(res, scale=(1, 1)),
+        transforms.RandomPerspective(fill=1, p=0.8, distortion_scale=0.5),
+        clip_normalizer
+    ])
 
 
 # --- Prompt ---
 # encode prompt with CLIP
 clip_model, _ = get_clip_model(clip_model_name)
-obj = "horse"
-region = "shoes"
-prompt = f"A point cloud render of a gray {obj} with highlighted {region}"
+prompt = f"A 3D point cloud representation of a gray mug with the precise area intented for gripping shown in green." # A 3D point cloud representation of a gray mug with the precise area intented for gripping shown in green.
 print("prompt : ", prompt)
 with torch.no_grad():
     prompt_tokenize = clip.tokenize(prompt).to(device)
@@ -170,7 +202,7 @@ for i in tqdm(range(n_iter)):
                                                std=1)
 
     # Calculate CLIP Loss
-    loss = clip_loss(clip_text, rendered_images, clip_model, n_augs, augment_transform)
+    loss = clip_loss(clip_text, rendered_images, clip_model, n_augs, augment_transform, clip_transform)
     loss.backward(retain_graph=True)
 
     optim.step()
@@ -186,10 +218,12 @@ for i in tqdm(range(n_iter)):
         with open(os.path.join(log_dir, "training_info.txt"), "a") as f:
             f.write(f"For iteration {i}... Prompt: {prompt}, Last 100 avg CLIP score: {np.mean(losses[-100:])}, CLIP score {losses[-1]}\n")
 
+torch.save(pred_class.detach(), f"{output_dir}{selected_index}.pth")
+
+# Compute intersection over union
+if not downsample_extention:
+    iou = intersection_over_union(pred_class, ground_truth, iou_treshold)
+    print("Intersection over Union = ", iou.item())
 
 # save results
-sample_points_cloud.save(f"{output_dir}{prompt.replace(' ', '_').replace('.', '')}.ply")
-
-# Save prompts
-# with open(os.path.join(dir(), prompt), "w") as f:
-#     f.write('')
+sample_points_cloud.save(f"{output_dir}{selected_index}.ply")
