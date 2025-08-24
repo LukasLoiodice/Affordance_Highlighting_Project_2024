@@ -6,6 +6,7 @@ Politecnico di Torino
 
 Introduction: *This paper aims to present our exploration, implementation and propositions of extension of the 3D highlighter developed by students from the University of Chicago. The goal of the project was to build a label-free pipeline for affordance generation on point cloud in a zero-shot fashion,leveraging pre-trained language vision models.*
 
+The final report of this project is available [here](s334726_s335276_s321430_project3_pdf.pdf).
 
 ![3mugs](./media/picture_intro.png)
 
